@@ -1,0 +1,5 @@
+MitmInstanceProfile:
+  Type: AWS::IAM::InstanceProfile
+  Properties:
+    Roles:
+      - Ref: MitmInstanceRole

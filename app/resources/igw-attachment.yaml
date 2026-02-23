@@ -1,0 +1,7 @@
+MitmVpcGatewayAttachment:
+  Type: AWS::EC2::VPCGatewayAttachment
+  Properties:
+    VpcId:
+      Ref: MitmVpc
+    InternetGatewayId:
+      Ref: MitmInternetGateway

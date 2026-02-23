@@ -1,0 +1,19 @@
+MitmWebTargetGroup:
+  Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  Properties:
+    Name:
+      Fn::Sub: '${AWS::StackName}-tg'
+    Port: 8081
+    Protocol: HTTP
+    VpcId:
+      Ref: MitmVpc
+    TargetType: instance
+    Targets:
+      - Id:
+          Ref: MitmInstance
+    HealthCheckPath: /health
+    HealthCheckPort: '8081'
+    HealthCheckProtocol: HTTP
+    HealthyThresholdCount: 2
+    UnhealthyThresholdCount: 3
+    HealthCheckIntervalSeconds: 30

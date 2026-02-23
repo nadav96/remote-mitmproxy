@@ -1,0 +1,115 @@
+MitmInstance:
+  Type: AWS::EC2::Instance
+  Properties:
+    InstanceType:
+      Ref: InstanceType
+    ImageId:
+      Ref: AmiId
+    KeyName:
+      Ref: KeyPairName
+    SubnetId:
+      Fn::If:
+        - UseSubnetA
+        - Ref: MitmSubnetA
+        - Ref: MitmSubnetB
+    SecurityGroupIds:
+      - Ref: MitmSecurityGroup
+    IamInstanceProfile:
+      Ref: MitmInstanceProfile
+    BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          VolumeSize: 20
+          VolumeType: gp3
+    UserData:
+      Fn::Base64:
+        Fn::Sub: |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          # ---- packages ----
+          yum update -y
+          yum install -y docker nginx httpd-tools
+          systemctl enable docker
+          systemctl start docker
+          usermod -aG docker ec2-user
+
+          # ---- custom mitmproxy Docker image ----
+          mkdir -p /opt/mitmproxy
+          chmod 777 /opt/mitmproxy
+
+          cat > /opt/mitmproxy/Dockerfile << 'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+          RUN pip install --no-cache-dir mitmproxy
+          RUN curl -L https://github.com/your-org/mitmproxy/releases/download/v1.0.0/mitmproxy-1.0.0-linux-x86_64.tar.gz -o /tmp/mitmproxy.tar.gz \
+              && tar -xzf /tmp/mitmproxy.tar.gz -C /usr/local/bin \
+              && rm -f /tmp/mitmproxy.tar.gz
+          RUN useradd -m mitmproxy
+          USER mitmproxy
+          WORKDIR /home/mitmproxy
+          EXPOSE 8080 8081
+          ENTRYPOINT ["mitmweb"]
+          DOCKERFILE
+
+          docker build -t custom-mitmproxy /opt/mitmproxy
+
+          # ---- fetch credentials from SSM ----
+          WEB_USER=$(aws ssm get-parameter --name "${WebUsername}" --with-decryption --query 'Parameter.Value' --output text --region ${AWS::Region})
+          WEB_PASS=$(aws ssm get-parameter --name "${WebPassword}" --with-decryption --query 'Parameter.Value' --output text --region ${AWS::Region})
+
+          # ---- download addon script from S3 ----
+          aws s3 cp s3://${ScriptsBucket}/${ScriptsPrefix}/addon.py /opt/mitmproxy/addon.py || true
+
+          MITM_CMD="--web-host 0.0.0.0 --set web_open_browser=false --set web_password=$WEB_PASS"
+          if [ "${ProxyMode}" = "reverse" ] && [ "${UpstreamUrl}" != "none" ]; then
+            MITM_CMD="--mode reverse:${UpstreamUrl} --web-host 0.0.0.0 --set web_open_browser=false --set web_password=$WEB_PASS"
+          fi
+
+          if [ -f /opt/mitmproxy/addon.py ]; then
+            MITM_CMD="$MITM_CMD -s /home/mitmproxy/.mitmproxy/addon.py"
+          fi
+
+          docker run -d \
+            --name mitmproxy \
+            --restart always \
+            -p 8080:8080 \
+            -p 127.0.0.1:8082:8081 \
+            -v /opt/mitmproxy:/home/mitmproxy/.mitmproxy \
+            custom-mitmproxy \
+            $MITM_CMD
+
+          # ---- nginx basic-auth reverse proxy for mitmweb ----
+          htpasswd -bc /etc/nginx/.htpasswd "$WEB_USER" "$WEB_PASS"
+
+          cat > /etc/nginx/conf.d/mitmweb.conf << 'NGINXCONF'
+          server {
+              listen 8081;
+
+              location /health {
+                  auth_basic off;
+                  return 200 'ok';
+                  add_header Content-Type text/plain;
+              }
+
+              location / {
+                  auth_basic "mitmweb";
+                  auth_basic_user_file /etc/nginx/.htpasswd;
+                  proxy_pass http://127.0.0.1:8082;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+                  proxy_set_header Host $host;
+                  proxy_read_timeout 86400;
+              }
+          }
+          NGINXCONF
+
+          systemctl enable nginx
+          systemctl start nginx
+
+          echo "=== user-data complete ==="
+    Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: '${AWS::StackName}-instance'

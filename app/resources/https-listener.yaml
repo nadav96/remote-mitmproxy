@@ -1,0 +1,15 @@
+MitmHTTPSListener:
+  Type: AWS::ElasticLoadBalancingV2::Listener
+  Properties:
+    LoadBalancerArn:
+      Ref: MitmALB
+    Port: 443
+    Protocol: HTTPS
+    Certificates:
+      - CertificateArn:
+          Fn::Sub: 'arn:aws:acm:${AWS::Region}:${AWS::AccountId}:certificate/${CertificateId}'
+    DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: MitmWebTargetGroup
+    SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06

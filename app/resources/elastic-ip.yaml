@@ -1,0 +1,10 @@
+MitmEIP:
+  Type: AWS::EC2::EIP
+  Properties:
+    Domain: vpc
+    InstanceId:
+      Ref: MitmInstance
+    Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: '${AWS::StackName}-eip'

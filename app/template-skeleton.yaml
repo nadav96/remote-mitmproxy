@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Remote mitmproxy - EC2 running mitmproxy + mitmweb with
+  HTTPS (ALB + ACM) and basic-auth on the web UI.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium, t3.large]
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 'your vpn key'
+    Description: EC2 key pair for SSH access
+  CertificateId:
+    Type: String
+    Default: 'your certificate id'
+    Description: ACM certificate ID (ARN is built dynamically using account ID and region)
+  WebUsername:
+    Type: String
+    Default: /remote-mitmproxy/WebUsername
+    Description: SSM Parameter Store path for mitmweb basic auth username
+  WebPassword:
+    Type: String
+    Default: /remote-mitmproxy/WebPassword
+    Description: SSM Parameter Store path for mitmweb basic auth password
+  ProxyMode:
+    Type: String
+    Default: reverse
+    AllowedValues: [regular, reverse]
+    Description: >
+      regular = forward proxy (configure device proxy settings).
+      reverse = reverse-proxy a specific UpstreamUrl.
+  UpstreamUrl:
+    Type: String
+    Default: 'https://example.com'
+    Description: >
+      Required when ProxyMode is reverse, e.g. https://example.com.
+      Ignored when ProxyMode is regular.
+  ProxyHostname:
+    Type: String
+    Default: 'the hostname for the reverse proxy endpoint'
+    Description: Hostname for the reverse proxy endpoint (must match the ACM certificate domain)
+  ScriptsBucket:
+    Type: String
+    Default: 'the bucketname to store the addon scripts'
+    Description: S3 bucket containing addon scripts
+  ScriptsPrefix:
+    Type: String
+    Default: remote-mitmproxy/scripts
+    Description: S3 prefix for addon scripts
+  AmiId:
+    Type: String
+    Default: ami-0f3caa1cf4417e51b
+    Description: EC2 AMI ID (Amazon Linux 2023, us-east-1)
+  InstanceSubnet:
+    Type: String
+    Default: A
+    AllowedValues: [A, B]
+    Description: Toggle between A and B to force EC2 replacement
+
+Conditions:
+  UseSubnetA:
+    Fn::Equals:
+      - Ref: InstanceSubnet
+      - A
+
+Globals:
+  Function:
+    Timeout: 3
+
+Resources: {}
+
+Outputs:
+  ProxyEndpoint:
+    Description: Reverse proxy endpoint (point your client here)
+    Value:
+      Fn::Sub: 'https://${ProxyHostname}'
+  MitmwebURL:
+    Description: mitmweb UI - HTTPS, requires login
+    Value:
+      Fn::Sub: 'https://${MitmALB.DNSName}'
+  ALBDNSName:
+    Description: ALB DNS name (create CNAME records pointing to this)
+    Value:
+      Fn::GetAtt:
+        - MitmALB
+        - DNSName
+  InstancePublicIP:
+    Description: EC2 Elastic IP
+    Value:
+      Ref: MitmEIP
+  SSHCommand:
+    Description: SSH into the instance
+    Value:
+      Fn::Sub: 'ssh -i <your-key>.pem ec2-user@${MitmEIP}'

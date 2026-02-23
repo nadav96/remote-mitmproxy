@@ -1,0 +1,16 @@
+MitmSubnetB:
+  Type: AWS::EC2::Subnet
+  Properties:
+    VpcId:
+      Ref: MitmVpc
+    CidrBlock: 10.0.2.0/24
+    AvailabilityZone:
+      Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+    MapPublicIpOnLaunch: true
+    Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: '${AWS::StackName}-subnet-b'

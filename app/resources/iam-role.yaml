@@ -1,0 +1,31 @@
+MitmInstanceRole:
+  Type: AWS::IAM::Role
+  Properties:
+    AssumeRolePolicyDocument:
+      Version: '2012-10-17'
+      Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+    ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+    Policies:
+      - PolicyName: S3ScriptsRead
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource:
+                Fn::Sub: 'arn:aws:s3:::${ScriptsBucket}/${ScriptsPrefix}/*'
+      - PolicyName: SSMParameterRead
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource:
+                Fn::Sub: 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/remote-mitmproxy/*'

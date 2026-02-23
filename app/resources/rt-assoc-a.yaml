@@ -1,0 +1,7 @@
+MitmSubnetARouteTableAssoc:
+  Type: AWS::EC2::SubnetRouteTableAssociation
+  Properties:
+    SubnetId:
+      Ref: MitmSubnetA
+    RouteTableId:
+      Ref: MitmRouteTable

@@ -1,0 +1,9 @@
+MitmRouteTable:
+  Type: AWS::EC2::RouteTable
+  Properties:
+    VpcId:
+      Ref: MitmVpc
+    Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: '${AWS::StackName}-rt'

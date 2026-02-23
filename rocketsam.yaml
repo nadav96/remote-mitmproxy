@@ -1,0 +1,9 @@
+appDir: $/app
+buildDir: $/.build
+commonDir: $/app/common
+resourcesDir: $/app/resources
+policiesDir: $/app/policies
+storageBucketName: your-s3-bucket
+storageBucketPrefix: ''
+stackName: remote-mitmproxy
+region: us-east-1
