@@ -1,124 +1,104 @@
 # Remote mitmproxy
 
-A RocketSam project that deploys an EC2 instance running [mitmproxy](https://mitmproxy.org/) with a web UI (mitmweb), fronted by an ALB with a valid HTTPS certificate.
+A CloudFormation-based project (using [RocketSam](https://www.npmjs.com/package/rocketsam)) that deploys a remote [mitmproxy](https://mitmproxy.org/) instance on AWS. Traffic goes through an ALB with a **valid ACM certificate**, so clients trust the HTTPS connection without installing any CA certificate.
 
 ## Architecture
 
-```
-Device                          Browser
-  │                               │
-  │ proxy (port 8080)             │ HTTPS :443
-  ▼                               ▼
-┌──────────┐               ┌─────────────┐
-│ EC2:8080 │               │  ALB (ACM)  │
-│ mitmproxy│               └──────┬──────┘
-│ (Docker) │                      │ HTTP :8081
-│          │               ┌──────▼──────┐
-│          │               │   Nginx     │
-│          │               │ (basic auth)│
-│          │               └──────┬──────┘
-│          │                      │ :8082
-│          │               ┌──────▼──────┐
-│          │◄──────────────│   mitmweb   │
-│          │  same container (localhost)  │
-└──────────┘               └─────────────┘
-```
+See [architecture.md](architecture.md) for a full diagram.
 
-- **Port 8080** — mitmproxy listener. Devices connect here (no auth).
-- **ALB :443** — HTTPS with ACM certificate → Nginx :8081 (basic auth) → mitmweb :8082 (localhost only).
-- **SSH :22** — for management and downloading the CA certificate.
+- **ALB (HTTPS :443)** — Terminates TLS using an ACM certificate. Routes traffic by hostname:
+  - `proxy.<your-domain>` → mitmproxy (port 8080)
+  - Everything else → mitmweb UI via Nginx (port 8081, basic auth)
+- **EC2** — Runs a Docker container with mitmweb + an optional Python addon script.
+- **Nginx** — Reverse proxy with basic auth protecting the mitmweb UI.
 
 ## Prerequisites
 
-- [RocketSam CLI](https://www.npmjs.com/package/rocketsam) installed (`npm i -g rocketsam`)
+- [RocketSam CLI](https://www.npmjs.com/package/rocketsam) (`npm i -g rocketsam`)
 - [AWS SAM CLI](https://aws.amazon.com/serverless/sam/)
-- AWS CLI configured with appropriate credentials
-- An **ACM certificate** in the same region (for ALB HTTPS)
-- An **EC2 key pair** in the same region
-- A **VPC** with at least 2 public subnets in different AZs
+- AWS CLI configured with credentials
+- An **ACM certificate** for your domain (e.g. `*.example.com`)
+- An **EC2 key pair** in the target region
+- An **S3 bucket** for storing the addon script and deployment artifacts
 
-## Parameters
+## Setup
 
-| Parameter | Default | Description |
-|---|---|---|
-| `VpcId` | — | VPC to deploy into |
-| `SubnetId` | — | Public subnet for the EC2 instance |
-| `ALBSubnetIds` | — | ≥2 subnets in different AZs for the ALB |
-| `InstanceType` | `t3.small` | EC2 instance type |
-| `KeyPairName` | — | SSH key pair name |
-| `CertificateArn` | — | ACM certificate ARN |
-| `WebUsername` | `admin` | mitmweb basic-auth username |
-| `WebPassword` | — | mitmweb basic-auth password (min 8 chars) |
-| `ProxyMode` | `regular` | `regular` (forward proxy) or `reverse` |
-| `UpstreamUrl` | — | Upstream URL for reverse mode (e.g. `https://example.com`) |
+### 1. Create SSM parameters for credentials
 
-## Deploy
+The web UI credentials are stored in AWS SSM Parameter Store (SecureString), not in the template.
 
 ```bash
-# Build the SAM template
-rocketsam build all
+aws ssm put-parameter \
+  --name "/remote-mitmproxy/WebUsername" \
+  --value "your-username" \
+  --type SecureString \
+  --region us-east-1
 
-# Deploy (you will be prompted for parameters)
+aws ssm put-parameter \
+  --name "/remote-mitmproxy/WebPassword" \
+  --value "your-secure-password" \
+  --type SecureString \
+  --region us-east-1
+```
+
+### 2. Configure the template
+
+Edit `app/template-skeleton.yaml` and set the parameter defaults:
+
+| Parameter | What to set |
+|---|---|
+| `KeyPairName` | Your EC2 key pair name |
+| `CertificateId` | The UUID from your ACM certificate ARN |
+| `ProxyHostname` | e.g. `proxy.example.com` |
+| `UpstreamUrl` | e.g. `https://upstream.example.com` (for reverse mode) |
+| `ScriptsBucket` | Your S3 bucket name |
+| `AmiId` | Amazon Linux 2023 AMI for your region |
+
+### 3. Configure RocketSam
+
+Edit `rocketsam.yaml` and set:
+- `storageBucketName` — your S3 bucket
+- `stackName` — your CloudFormation stack name
+- `region` — your AWS region
+
+### 4. Deploy
+
+```bash
+# Upload addon script to S3, build template, and deploy
+./deploy.sh
+```
+
+Or manually:
+
+```bash
+# Upload addon script
+aws s3 cp app/scripts/addon.py s3://<your-bucket>/remote-mitmproxy/scripts/addon.py
+
+# Build and deploy
+rocketsam template
 rocketsam deploy
 ```
 
-If `rocketsam deploy` doesn't prompt for parameters, pass them via the AWS CLI after building:
+### 5. DNS setup
 
-```bash
-aws cloudformation deploy \
-  --template-file .build/template.yaml \
-  --stack-name remote-mitmproxy \
-  --capabilities CAPABILITY_IAM \
-  --region eu-west-1 \
-  --parameter-overrides \
-    VpcId=vpc-xxxxxxxx \
-    SubnetId=subnet-xxxxxxxx \
-    ALBSubnetIds=subnet-aaaa,subnet-bbbb \
-    KeyPairName=my-key \
-    CertificateArn=arn:aws:acm:eu-west-1:123456789012:certificate/xxxxxxxx \
-    WebPassword=MySecurePass123
-```
+After deployment, run `rocketsam outputs` to get the ALB DNS name. Create CNAME records:
+
+- `proxy.example.com` → `<ALB DNS name>`
+- `mitmweb.example.com` → `<ALB DNS name>` (optional, for the web UI)
 
 ## Usage
 
-### 1. Get stack outputs
+- **Proxy endpoint**: `https://proxy.<your-domain>` — point your client here
+- **Web UI**: Open the `MitmwebURL` from stack outputs, login with your SSM credentials
+- **SSH**: Use the `SSHCommand` from stack outputs
 
-```bash
-rocketsam outputs
-```
+## Forcing EC2 replacement
 
-This shows:
-- **ProxyEndpoint** — `<EIP>:8080` (configure on your device)
-- **MitmwebURL** — `https://<alb-dns>` (open in browser, login required)
-- **SSHCommand** / **DownloadCACert** — helper commands
+To re-run UserData (e.g. after changing the addon script or Docker image), toggle the `InstanceSubnet` parameter between `A` and `B` in `app/template-skeleton.yaml`, then redeploy. This forces CloudFormation to create a fresh EC2 instance.
 
-### 2. Install the CA certificate on your device
+## Addon script
 
-mitmproxy generates a CA certificate on first run. You need to install it on your device to intercept HTTPS traffic.
-
-```bash
-# Download from the EC2 instance
-scp -i <your-key>.pem ec2-user@<EIP>:/opt/mitmproxy/mitmproxy-ca-cert.pem .
-
-# Install on macOS
-sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain mitmproxy-ca-cert.pem
-```
-
-For iOS/Android, transfer the `.pem` file and install it via Settings → Certificates.
-
-### 3. Configure your device proxy
-
-Point your device's HTTP proxy settings to the EC2 Elastic IP on port **8080**.
-
-### 4. View traffic
-
-Open the **MitmwebURL** from the stack outputs in your browser. Log in with the `WebUsername` / `WebPassword` you set during deployment.
-
-## Proxy Modes
-
-- **regular** (default) — Standard forward proxy. Configure your device to use `<EIP>:8080` as its HTTP/HTTPS proxy.
-- **reverse** — Reverse proxy for a specific upstream. Set `UpstreamUrl` to the target (e.g. `https://api.example.com`). Clients connect to `<EIP>:8080` and traffic is forwarded to the upstream.
+The `app/scripts/addon.py` is a mitmproxy addon that rewrites OAuth redirect URIs and response Location headers between your proxy domain and the upstream host. Edit `PROXY_HOST` and `TARGET_HOST` in the script to match your setup.
 
 ## Troubleshooting
 
@@ -130,19 +110,18 @@ ssh -i <your-key>.pem ec2-user@<EIP>
 cat /var/log/user-data.log
 
 # Check Docker container
-docker ps
-docker logs mitmproxy
+sudo docker ps
+sudo docker logs mitmproxy
 
 # Check nginx
 systemctl status nginx
-journalctl -u nginx
 
 # Restart mitmproxy
-docker restart mitmproxy
+sudo docker restart mitmproxy
 ```
 
 ## Cleanup
 
 ```bash
-aws cloudformation delete-stack --stack-name remote-mitmproxy --region eu-west-1
+rocketsam remove
 ```
