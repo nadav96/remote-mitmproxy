@@ -1,27 +1,20 @@
 MitmSecurityGroup:
   Type: AWS::EC2::SecurityGroup
   Properties:
-    GroupDescription: EC2 - proxy, mitmweb (ALB only), SSH
+    GroupDescription: EC2 - HTTP (Cloudflare) + SSH
     VpcId:
       Ref: MitmVpc
     SecurityGroupIngress:
       - IpProtocol: tcp
-        FromPort: 8080
-        ToPort: 8080
-        SourceSecurityGroupId:
-          Ref: ALBSecurityGroup
-        Description: mitmproxy - ALB only
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+        Description: HTTP (Cloudflare proxied)
       - IpProtocol: tcp
         FromPort: 22
         ToPort: 22
         CidrIp: 0.0.0.0/0
         Description: SSH
-      - IpProtocol: tcp
-        FromPort: 8081
-        ToPort: 8081
-        SourceSecurityGroupId:
-          Ref: ALBSecurityGroup
-        Description: mitmweb - ALB only
     Tags:
       - Key: Name
         Value:

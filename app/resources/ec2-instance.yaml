@@ -42,9 +42,6 @@ MitmInstance:
           FROM python:3.12-slim
           RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
           RUN pip install --no-cache-dir mitmproxy
-          RUN curl -L https://github.com/your-org/mitmproxy/releases/download/v1.0.0/mitmproxy-1.0.0-linux-x86_64.tar.gz -o /tmp/mitmproxy.tar.gz \
-              && tar -xzf /tmp/mitmproxy.tar.gz -C /usr/local/bin \
-              && rm -f /tmp/mitmproxy.tar.gz
           RUN useradd -m mitmproxy
           USER mitmproxy
           WORKDIR /home/mitmproxy
@@ -61,9 +58,9 @@ MitmInstance:
           # ---- download addon script from S3 ----
           aws s3 cp s3://${ScriptsBucket}/${ScriptsPrefix}/addon.py /opt/mitmproxy/addon.py || true
 
-          MITM_CMD="--web-host 0.0.0.0 --set web_open_browser=false --set web_password=$WEB_PASS"
+          MITM_CMD="--web-host 0.0.0.0 --set web_open_browser=false"
           if [ "${ProxyMode}" = "reverse" ] && [ "${UpstreamUrl}" != "none" ]; then
-            MITM_CMD="--mode reverse:${UpstreamUrl} --web-host 0.0.0.0 --set web_open_browser=false --set web_password=$WEB_PASS"
+            MITM_CMD="--mode reverse:${UpstreamUrl} --web-host 0.0.0.0 --set web_open_browser=false"
           fi
 
           if [ -f /opt/mitmproxy/addon.py ]; then
@@ -79,12 +76,30 @@ MitmInstance:
             custom-mitmproxy \
             $MITM_CMD
 
-          # ---- nginx basic-auth reverse proxy for mitmweb ----
+          # ---- nginx: route by hostname on port 80 ----
           htpasswd -bc /etc/nginx/.htpasswd "$WEB_USER" "$WEB_PASS"
 
-          cat > /etc/nginx/conf.d/mitmweb.conf << 'NGINXCONF'
+          cat > /etc/nginx/conf.d/mitmproxy.conf << 'NGINXCONF'
+          # Proxy traffic (proxy.<domain> -> mitmproxy port 8080)
           server {
-              listen 8081;
+              listen 80;
+              server_name ${ProxyHostname};
+
+              location / {
+                  proxy_pass http://127.0.0.1:8080;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_read_timeout 86400;
+              }
+          }
+
+          # Mitmweb UI (everything else -> mitmweb with basic auth)
+          server {
+              listen 80 default_server;
+              server_name _;
 
               location /health {
                   auth_basic off;
@@ -105,6 +120,7 @@ MitmInstance:
           }
           NGINXCONF
 
+          rm -f /etc/nginx/conf.d/default.conf
           systemctl enable nginx
           systemctl start nginx
 
